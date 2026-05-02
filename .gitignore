@@ -106,7 +106,7 @@ locust_stats*.csv
 # README.md
 # VIDEO_SCRIPT.md
 # TECHNICAL_DOCUMENTATION.md
-# PERFORMANCE_REPORT.md
+PERFORMANCE_REPORT.md
 !.env.example
 !data/.gitkeep
 

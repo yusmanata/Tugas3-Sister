@@ -465,3 +465,6 @@ distributed-sync-system/
 | `asyncio.TimeoutError` | Node peer tidak merespons; pastikan semua node sudah `start()` |
 | `Audit Chain Broken` | File log dimodifikasi manual; hapus dan buat log baru |
 | Docker `pipe not found` | Pastikan **Docker Desktop** sudah dibuka dan dalam status *Running* |
+
+Link Youtube :
+https://youtu.be/7rvkRylZ4_4

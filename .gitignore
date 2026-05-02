@@ -109,3 +109,5 @@ locust_stats*.csv
 # PERFORMANCE_REPORT.md
 !.env.example
 !data/.gitkeep
+
+VIDEO_SCRIPT.md

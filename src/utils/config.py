@@ -2,18 +2,30 @@ import os
 
 # Konfigurasi default cluster untuk Raft
 # Menggunakan localhost dengan port yang berbeda untuk simulasi
-def get_cluster_config():
-    env_cluster = os.environ.get('CLUSTER_NODES')
-    if env_cluster:
-        # Expected format: node_1:10.0.0.1:8000,node_2:10.0.0.2:8000
-        cluster = {}
-        for node_str in env_cluster.split(','):
-            if not node_str.strip(): continue
-            parts = node_str.strip().split(':')
-            if len(parts) == 3:
-                node_id, host, port = parts
-                cluster[node_id] = (host, int(port))
-        return cluster
+def get_cluster_config(service_type: str = None):
+    # Map service types to their specific environment variables
+    service_map = {
+        'lock': 'LOCK_CLUSTER_NODES',
+        'queue': 'QUEUE_CLUSTER_NODES',
+        'cache': 'CACHE_CLUSTER_NODES'
+    }
+    
+    # If service_type is provided, prioritize that specific env var
+    target_vars = [service_map[service_type]] if service_type in service_map else []
+    # Add generic fallback
+    target_vars.append('CLUSTER_NODES')
+    
+    cluster = {}
+    for var in target_vars:
+        env_cluster = os.environ.get(var)
+        if env_cluster:
+            for node_str in env_cluster.split(','):
+                if not node_str.strip(): continue
+                parts = node_str.strip().split(':')
+                if len(parts) == 3:
+                    node_id, host, port = parts
+                    cluster[node_id] = (host, int(port))
+            if cluster: return cluster # Return as soon as we find a match
     
     # Fallback to local simulation
     return {

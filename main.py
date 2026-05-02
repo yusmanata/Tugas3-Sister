@@ -19,13 +19,16 @@ async def main():
     
     logger.info(f"Starting {args.service} service on {args.node_id}...")
     
+    from src.utils.config import get_cluster_config
+    cluster_config = get_cluster_config(args.service)
+    
     node = None
     if args.service == 'lock':
-        node = LockManager(args.node_id)
+        node = LockManager(args.node_id, cluster_config)
     elif args.service == 'queue':
-        node = QueueNode(args.node_id)
+        node = QueueNode(args.node_id, cluster_config)
     elif args.service == 'cache':
-        node = CacheNode(args.node_id)
+        node = CacheNode(args.node_id, cluster_config)
         
     if not node:
         logger.error("Failed to initialize node.")

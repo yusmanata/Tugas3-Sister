@@ -32,8 +32,9 @@ class MessagePasser:
         self.message_handler = handler
 
     async def start_server(self):
+        # Always bind to 0.0.0.0 in Docker/distributed environments to listen on all interfaces
         self.server = await asyncio.start_server(
-            self._handle_client, self.host, self.port
+            self._handle_client, '0.0.0.0', self.port
         )
         self.logger.info(f"Server listening on {self.host}:{self.port}")
         

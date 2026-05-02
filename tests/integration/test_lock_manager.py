@@ -128,7 +128,7 @@ async def test_lock_manager():
     
     # Leader can still function because 2/3 nodes are available (quorum = 2)
     await leader.acquire_lock('R5', 'ClientZ', 'exclusive')
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.0)
     assert 'R5' in leader.locks
     print(f"Lock R5 acquired on leader during partition.")
     

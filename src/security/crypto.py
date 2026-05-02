@@ -4,15 +4,20 @@ import json
 import base64
 
 # Shared Secret Key for symmetric encryption across the cluster
-# In a real system, this would be securely distributed or negotiated via asymmetric keys (e.g., TLS/SSL).
-# For this simulation, we use a static pre-shared key.
-SHARED_SECRET = b'JgU3b1vR3WbY4xV5T8Z9bA2_cFdEgH_IjKlMnOpQrStU=' 
-# Ensure it is a valid 32-byte url-safe base64 string
+# We prioritize the ENCRYPTION_KEY from the environment variables (set in .env)
+_env_key = os.environ.get('ENCRYPTION_KEY')
+if _env_key:
+    SHARED_SECRET = _env_key.encode()
+else:
+    SHARED_SECRET = b'JgU3b1vR3WbY4xV5T8Z9bA2_cFdEgH_IjKlMnOpQrStU=' 
+
 try:
     _fernet = Fernet(SHARED_SECRET)
-except ValueError:
-    _key = Fernet.generate_key()
-    _fernet = Fernet(_key)
+except Exception:
+    # If key is invalid, use a fixed valid fallback key so all nodes still match
+    # A 32-byte base64 encoded key
+    _fallback = b'u-Y_D5H0fF_Q3Y9_z1A2B3C4D5E6F7G8H9I0J1K2L3M='
+    _fernet = Fernet(_fallback)
 
 class SecurityCrypto:
     @staticmethod

@@ -16,6 +16,8 @@ services:
     build: .
     container_name: lock_node_1
     command: ["--node-id", "lock_1", "--service", "lock"]
+    ports:
+      - "8001:8001"
     env_file:
       - .env
     networks:
@@ -28,6 +30,8 @@ services:
     build: .
     container_name: lock_node_2
     command: ["--node-id", "lock_2", "--service", "lock"]
+    ports:
+      - "8002:8002"
     env_file:
       - .env
     networks:
@@ -40,6 +44,8 @@ services:
     build: .
     container_name: lock_node_3
     command: ["--node-id", "lock_3", "--service", "lock"]
+    ports:
+      - "8003:8003"
     env_file:
       - .env
     networks:
@@ -55,6 +61,8 @@ services:
     build: .
     container_name: queue_node_1
     command: ["--node-id", "queue_1", "--service", "queue"]
+    ports:
+      - "8011:8011"
     env_file:
       - .env
     networks:
@@ -69,6 +77,8 @@ services:
     build: .
     container_name: queue_node_2
     command: ["--node-id", "queue_2", "--service", "queue"]
+    ports:
+      - "8012:8012"
     env_file:
       - .env
     networks:
@@ -83,6 +93,8 @@ services:
     build: .
     container_name: queue_node_3
     command: ["--node-id", "queue_3", "--service", "queue"]
+    ports:
+      - "8013:8013"
     env_file:
       - .env
     networks:
@@ -100,6 +112,8 @@ services:
     build: .
     container_name: cache_node_1
     command: ["--node-id", "cache_1", "--service", "cache"]
+    ports:
+      - "8021:8021"
     env_file:
       - .env
     networks:
@@ -112,6 +126,8 @@ services:
     build: .
     container_name: cache_node_2
     command: ["--node-id", "cache_2", "--service", "cache"]
+    ports:
+      - "8022:8022"
     env_file:
       - .env
     networks:
@@ -124,6 +140,8 @@ services:
     build: .
     container_name: cache_node_3
     command: ["--node-id", "cache_3", "--service", "cache"]
+    ports:
+      - "8023:8023"
     env_file:
       - .env
     networks:

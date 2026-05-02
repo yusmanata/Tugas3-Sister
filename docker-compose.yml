@@ -1,0 +1,154 @@
+version: '3.8'
+
+# =============================================================
+# Distributed Sync System — Full Cluster Orchestration
+# Satu Dockerfile universal menjalankan semua jenis node.
+# Gunakan: docker-compose up --build -d
+# Scale  : Edit CLUSTER_NODES di .env lalu restart
+# =============================================================
+
+services:
+
+  # ─────────────────────────────────────────
+  # LOCK MANAGER CLUSTER (Raft Consensus)
+  # ─────────────────────────────────────────
+  lock_node_1:
+    build: .
+    container_name: lock_node_1
+    command: ["--node-id", "lock_1", "--service", "lock"]
+    env_file:
+      - .env
+    networks:
+      - sync_network
+    restart: on-failure
+    depends_on:
+      - redis
+
+  lock_node_2:
+    build: .
+    container_name: lock_node_2
+    command: ["--node-id", "lock_2", "--service", "lock"]
+    env_file:
+      - .env
+    networks:
+      - sync_network
+    restart: on-failure
+    depends_on:
+      - redis
+
+  lock_node_3:
+    build: .
+    container_name: lock_node_3
+    command: ["--node-id", "lock_3", "--service", "lock"]
+    env_file:
+      - .env
+    networks:
+      - sync_network
+    restart: on-failure
+    depends_on:
+      - redis
+
+  # ─────────────────────────────────────────
+  # QUEUE CLUSTER (Consistent Hashing + AOF)
+  # ─────────────────────────────────────────
+  queue_node_1:
+    build: .
+    container_name: queue_node_1
+    command: ["--node-id", "queue_1", "--service", "queue"]
+    env_file:
+      - .env
+    networks:
+      - sync_network
+    volumes:
+      - ./data/queue_logs:/app/data/queue_logs
+    restart: on-failure
+    depends_on:
+      - redis
+
+  queue_node_2:
+    build: .
+    container_name: queue_node_2
+    command: ["--node-id", "queue_2", "--service", "queue"]
+    env_file:
+      - .env
+    networks:
+      - sync_network
+    volumes:
+      - ./data/queue_logs:/app/data/queue_logs
+    restart: on-failure
+    depends_on:
+      - redis
+
+  queue_node_3:
+    build: .
+    container_name: queue_node_3
+    command: ["--node-id", "queue_3", "--service", "queue"]
+    env_file:
+      - .env
+    networks:
+      - sync_network
+    volumes:
+      - ./data/queue_logs:/app/data/queue_logs
+    restart: on-failure
+    depends_on:
+      - redis
+
+  # ─────────────────────────────────────────
+  # CACHE CLUSTER (MESI Protocol + Redis)
+  # ─────────────────────────────────────────
+  cache_node_1:
+    build: .
+    container_name: cache_node_1
+    command: ["--node-id", "cache_1", "--service", "cache"]
+    env_file:
+      - .env
+    networks:
+      - sync_network
+    restart: on-failure
+    depends_on:
+      - redis
+
+  cache_node_2:
+    build: .
+    container_name: cache_node_2
+    command: ["--node-id", "cache_2", "--service", "cache"]
+    env_file:
+      - .env
+    networks:
+      - sync_network
+    restart: on-failure
+    depends_on:
+      - redis
+
+  cache_node_3:
+    build: .
+    container_name: cache_node_3
+    command: ["--node-id", "cache_3", "--service", "cache"]
+    env_file:
+      - .env
+    networks:
+      - sync_network
+    restart: on-failure
+    depends_on:
+      - redis
+
+  # ─────────────────────────────────────────
+  # REDIS — Distributed State Backend
+  # ─────────────────────────────────────────
+  redis:
+    image: redis:alpine
+    container_name: redis_store
+    ports:
+      - "6379:6379"
+    networks:
+      - sync_network
+    restart: always
+    volumes:
+      - redis_data:/data
+
+networks:
+  sync_network:
+    driver: bridge
+
+volumes:
+  redis_data:

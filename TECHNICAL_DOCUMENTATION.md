@@ -91,60 +91,33 @@ graph TD
 
 **File:** `src/consensus/raft.py`, `src/nodes/lock_manager.py`
 
-#### Cara Kerja Raft (Normal Operation)
-Raft memisahkan konsensus menjadi tiga sub-problem: **Leader Election**, **Log Replication**, dan **Safety**.
+Distributed Lock Manager bertugas memastikan bahwa hanya satu klien yang boleh mengakses suatu resource pada satu waktu (*exclusive lock*), atau beberapa klien boleh membaca secara bersamaan (*shared lock*). Untuk menjamin konsistensi keputusan ini di seluruh node, digunakan algoritma **Raft Consensus**.
 
-**a. Leader Election**
-```mermaid
-stateDiagram-v2
-    [*] --> FOLLOWER : Node Start
-    FOLLOWER --> CANDIDATE : election_timeout (1.5-3.0s)\nno heartbeat received
-    CANDIDATE --> CANDIDATE : vote rejected / timeout
-    CANDIDATE --> LEADER : majority votes received\n(> N/2 votes)
-    CANDIDATE --> FOLLOWER : higher term discovered
-    LEADER --> FOLLOWER : higher term discovered
-    LEADER --> LEADER : send APPEND_ENTRIES heartbeat\nevery 0.5 detik
-```
+#### a. Leader Election
 
-**b. Log Replication**
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant L as Leader
-    participant F1 as Follower 1
-    participant F2 as Follower 2
+Setiap node dalam kluster Raft selalu berada di salah satu dari tiga kondisi: **Follower**, **Candidate**, atau **Leader**.
 
-    C->>L: CLIENT_COMMAND {command}
-    L->>L: Append entry to log: {term, command}
-    L->>F1: APPEND_ENTRIES {prev_log_index, entries[], leader_commit}
-    L->>F2: APPEND_ENTRIES {prev_log_index, entries[], leader_commit}
-    F1->>F1: Validate log consistency
-    F2->>F2: Validate log consistency
-    F1->>L: APPEND_ENTRIES_RESPONSE {success: true, match_index}
-    F2->>L: APPEND_ENTRIES_RESPONSE {success: true, match_index}
-    L->>L: Update match_index, majority reached
-    L->>L: commit_index = N
-    L->>L: apply command to state machine
-```
+Saat sistem pertama kali berjalan, semua node masuk sebagai **Follower** dan menunggu sinyal dari Leader. Jika dalam rentang waktu tertentu — disebut *election timeout*, dipilih secara acak antara **1.5–3.0 detik** — tidak ada sinyal heartbeat yang datang, Follower berasumsi bahwa Leader sudah mati dan memutuskan untuk maju menjadi **Candidate**.
 
-**c. Deadlock Detection (Wait-For Graph)**
+Sebagai Candidate, node menaikkan nomor periode (`term`), memberikan suara untuk dirinya sendiri, lalu mengirim pesan `REQUEST_VOTE` ke seluruh node lain. Node lain membalas dengan memberikan suara jika mereka belum memilih di periode yang sama dan log Candidate minimal sama lengkapnya dengan log mereka.
 
-`LockManager` memelihara graf arah di mana `A → B` berarti "A menunggu resource yang dipegang B".
+Jika satu Candidate berhasil mengumpulkan suara **mayoritas** (lebih dari separuh total node), ia menjadi **Leader**. Leader kemudian langsung mengirimkan pesan `APPEND_ENTRIES` kosong setiap **0.5 detik** sebagai heartbeat agar para Follower tahu bahwa Leader masih aktif.
 
-```mermaid
-graph LR
-    CX[ClientX] -- "holds R3" --> R3((R3))
-    CY[ClientY] -- "holds R4" --> R4((R4))
-    CX -- "waiting for" --> R4
-    CY -- "waiting for" --> R3
+#### b. Log Replication
 
-    style CX fill:#e74c3c,color:#fff
-    style CY fill:#e74c3c,color:#fff
-    style R3 fill:#3498db,color:#fff
-    style R4 fill:#3498db,color:#fff
-```
+Ketika klien ingin mengunci sebuah resource, permintaan tidak langsung diproses. Permintaan terlebih dahulu ditulis ke dalam **Raft Log** di node Leader sebagai *entry* baru berisi `{term, command}`.
 
-> **CYCLE DETECTED!** ClientX → R4 → ClientY → R3 → ClientX. Permintaan ACQUIRE_LOCK dari ClientY ditolak.
+Leader kemudian mengirimkan entry tersebut ke semua Follower melalui pesan `APPEND_ENTRIES`. Setiap Follower memvalidasi konsistensi log (dengan membandingkan `prev_log_index` dan `prev_log_term`). Jika valid, Follower menambahkan entry ke log lokalnya dan membalas `success: true`.
+
+Ketika Leader menerima konfirmasi dari **mayoritas node**, entry dianggap *committed* dan baru dieksekusi ke state machine. Ini menjamin bahwa meskipun beberapa node crash, keputusan yang sudah commit tidak akan pernah hilang.
+
+#### c. Deadlock Detection (Wait-For Graph)
+
+Sebelum permintaan `ACQUIRE_LOCK` ditulis ke Raft Log, `LockManager` terlebih dahulu memeriksa apakah permintaan tersebut akan menyebabkan **deadlock**.
+
+Caranya dengan memelihara sebuah **Wait-For Graph** — graf berarah di mana sisi `A → B` berarti "klien A menunggu resource yang dipegang klien B". Setiap ada permintaan baru, graf diperbarui dan dicek apakah terbentuk **siklus** menggunakan algoritma DFS.
+
+Contoh: ClientX memegang R3 dan menunggu R4, sementara ClientY memegang R4 dan menunggu R3. Ini membentuk siklus `ClientX → ClientY → ClientX`. Sistem mendeteksi siklus ini dan langsung menolak permintaan yang terakhir masuk, sehingga deadlock tidak pernah terjadi.
 
 **Parameter Konfigurasi Raft:**
 | Parameter | Nilai | Keterangan |
@@ -159,64 +132,31 @@ graph LR
 
 **File:** `src/utils/consistent_hashing.py`, `src/nodes/queue_node.py`
 
+Distributed Queue System mendistribusikan pesan ke antrian yang tersebar di beberapa node secara merata. Algoritma utamanya adalah **Consistent Hashing**, yang menentukan node mana yang bertanggung jawab atas topik tertentu.
+
 #### a. Consistent Hash Ring dengan Virtual Nodes
 
-```
-Physical Nodes: [node_1, node_2, node_3]
-Virtual Nodes per Physical Node: 100
+Bayangkan sebuah lingkaran angka dari 0 sampai 2¹²⁸. Setiap node fisik ditempatkan di **100 titik** di lingkaran ini (bukan hanya satu), yang disebut *virtual nodes*. Untuk 3 node fisik, total ada 300 titik di lingkaran.
 
-Hash Ring (lingkaran 0 ... 2^128):
-   0                                          2^128
-   |──────────────────────────────────────────|
-   |..n1_#0..n2_#0..n3_#0..n1_#1..n2_#1.....│
-               ↑
-         Hash("orders") → menunjuk ke node_2 sebagai Primary
-```
+Ketika ada pesan masuk dengan topik `"orders"`, sistem menghitung hash MD5 dari `"orders"` menghasilkan sebuah angka di lingkaran. Sistem mencari titik virtual node pertama yang nilainya lebih besar atau sama dengan hash tersebut — itulah node **Primary**. Untuk replikasi, sistem berjalan searah jarum jam mencari titik dari **node fisik yang berbeda** — itulah node **Replica**.
 
-**Algoritma `get_replicas(key, count=2)`:**
-1. Hitung `hash(key)` menggunakan MD5.
-2. Cari node pertama di ring yang `hash ≥ hash(key)` → ini adalah **Primary**.
-3. Berjalan searah jarum jam di ring untuk menemukan node **berbeda** berikutnya → ini adalah **Replica**.
-4. Kembalikan daftar `[primary, replica_1, ...]`.
+Keunggulannya dibanding hashing biasa: jika satu node mati, hanya sekitar `1/N` pesan yang perlu dipindahkan. Pada hashing biasa (`hash % N`), semua pesan harus diremap ulang setiap ada perubahan node.
 
-**Manfaat:** Jika satu node mati, hanya ~`1/N` data yang berpindah ke node lain, bukan semua data di-redistribute.
+#### b. At-Least-Once Delivery dengan Visibility Timeout
 
-#### b. At-Least-Once Delivery (Visibility Timeout)
+Sistem menjamin setiap pesan **pasti diproses setidaknya satu kali**, meskipun consumer mengalami crash di tengah proses.
 
-```mermaid
-sequenceDiagram
-    participant P as Producer
-    participant PN as Primary Node
-    participant RN as Replica Node
-    participant CN as Consumer
+Saat **Producer** mengirim pesan, Primary Node menyimpan ke `queue[]`, mencatat ke AOF Log, lalu mereplikasi ke Replica Node.
 
-    P->>PN: PRODUCE {topic, payload}
-    PN->>PN: Append to queue[]
-    PN->>PN: Write AOF Log: PRODUCE msg_id payload
-    PN->>RN: REPLICATE_PRODUCE {topic, msg_id, payload}
+Saat **Consumer** meminta pesan, Primary **tidak langsung menghapus** pesan. Pesan dipindahkan ke `pending_acks{}` dan timer **Visibility Timeout 5 detik** dimulai. Selama 5 detik ini, pesan tidak diberikan ke consumer lain.
 
-    CN->>PN: CONSUME {topic, consumer_id}
-    PN->>PN: Pop from queue[] → pending_acks{}
-    PN->>PN: Start VISIBILITY_TIMEOUT (5s)
-    PN->>PN: Write AOF Log: CONSUME msg_id
-    PN->>RN: REPLICATE_CONSUME {topic, msg_id}
-    PN->>CN: CONSUME_RESPONSE {msg}
-
-    alt ACK diterima dalam 5 detik
-        CN->>PN: CLIENT_ACK {topic, msg_id}
-        PN->>PN: Delete from pending_acks{}
-        PN->>PN: Write AOF Log: ACK msg_id
-        PN->>RN: REPLICATE_ACK {topic, msg_id}
-    else Timeout (tidak ada ACK)
-        PN->>PN: _check_timeouts() → re-queue ke depan antrian
-    end
-```
+- Jika consumer mengirim `CLIENT_ACK` dalam 5 detik → pesan dihapus secara permanen.
+- Jika 5 detik berlalu tanpa ACK (consumer crash) → fungsi `_check_timeouts()` mengembalikan pesan ke depan antrian untuk diambil consumer lain.
 
 #### c. Persistensi dengan AOF (Append-Only File)
 
-Format log: `<OPERATION> <msg_id> [arg2]\n`
+Setiap operasi dicatat ke file log dengan format `OPERASI msg_id [argumen]`:
 
-Contoh file `data/queue_logs/node_1/orders.log`:
 ```
 PRODUCE a1b2-c3d4 {"order_id": 123}
 PRODUCE e5f6-g7h8 {"order_id": 456}
@@ -224,7 +164,7 @@ CONSUME a1b2-c3d4 consumer_A
 ACK a1b2-c3d4
 ```
 
-Saat restart, file dibaca ulang secara berurutan untuk merekonstruksi state antrian.
+Ketika node restart setelah crash, file ini dibaca dari awal secara berurutan. Sistem memutar ulang setiap operasi sehingga state antrian kembali persis seperti sebelum crash — teknik yang sama dengan yang digunakan Redis dalam mode AOF persistence.
 
 ---
 
@@ -232,72 +172,46 @@ Saat restart, file dibaca ulang secara berurutan untuk merekonstruksi state antr
 
 **File:** `src/nodes/cache_node.py`
 
-#### a. State Transitions MESI
+Cache Coherence menjawab pertanyaan: bagaimana memastikan semua node melihat data yang sama, padahal masing-masing punya salinan data di cache lokalnya sendiri? Sistem ini menggunakan protokol **MESI** — singkatan dari empat kondisi yang bisa dimiliki sebuah data di cache.
 
-| State | Arti | Kapan Terjadi |
-|---|---|---|
-| **M** (Modified) | Data terbaru hanya ada di node ini, belum disinkronkan ke memori | Setelah operasi `write` berhasil |
-| **E** (Exclusive) | Hanya node ini yang menyimpan data, sama dengan memori | Setelah `read` dari memori tanpa ada node lain yang punya |
-| **S** (Shared) | Beberapa node menyimpan data yang sama (read-only) | Setelah `BusRd` disambut oleh node lain |
-| **I** (Invalid) | Data sudah usang, tidak boleh digunakan | Setelah menerima `BusRdX` atau `BusUpgr` dari node lain |
+#### a. Empat State MESI
 
-#### b. Diagram Transisi State
+**Modified (M)** — Data ini hanya ada di node saya dan sudah diubah sehingga berbeda dengan yang ada di Redis. Saya harus *flush* data ini ke Redis sebelum node lain membacanya.
 
-```mermaid
-stateDiagram-v2
-    [*] --> I : Node Start
-    I --> M : Write Miss\n(BusRdX broadcast)
-    I --> E : Read Miss\n(BusRd, no other holder)
-    I --> S : Read Miss\n(BusRd, others share)
+**Exclusive (E)** — Data ini hanya ada di node saya, tapi nilainya masih sama dengan di Redis. Tidak ada node lain yang punya salinannya. Saya bisa mengubahnya langsung tanpa memberitahu siapapun.
 
-    M --> S : BusRd snooped\n(downgrade, writeback to memory)
-    M --> I : BusRdX snooped\n(invalidate)
+**Shared (S)** — Beberapa node mempunyai salinan data ini dan semuanya bersifat *read-only*. Jika saya ingin mengubah data, saya harus memberitahu semua node lain untuk menghapus salinan mereka terlebih dahulu.
 
-    E --> M : Local Write\n(silent upgrade)
-    E --> S : BusRd snooped
-    E --> I : BusRdX snooped
+**Invalid (I)** — Data ini ada di cache saya tapi sudah tidak valid karena node lain baru saja mengubahnya. Saya tidak boleh menggunakannya dan harus memintanya dari Redis atau node yang punya versi terbaru.
 
-    S --> M : Write Miss\n(BusRdX) or BusUpgr
-    S --> I : BusRdX snooped
+#### b. Mekanisme Bus Snooping
 
-    note right of M : Data hanya di node ini\nBelum sync ke memori
-    note right of E : Hanya node ini punya\nSama dgn memori
-    note right of S : Multi-node punya\nRead-only
-    note right of I : Data usang\nJangan dipakai
-```
+Protokol MESI bekerja melalui **Bus Snooping**: setiap node "mendengarkan" semua pesan di jaringan — bahkan yang bukan ditujukan padanya — untuk mengetahui apakah ada perubahan data yang perlu ditindaklanjuti.
+
+**Contoh Skenario Write Miss:**
+
+Node 2 ingin menulis data baru untuk key `"A"`. Ia mengecek cache lokalnya dan menemukan state `I` (Invalid) — ini adalah *write miss*.
+
+Node 2 menyiarkan pesan `BusRdX` (Bus Read Exclusive) ke semua node lain yang berarti: *"Saya akan menulis ke key A. Tolong invalidasi salinan kalian."*
+
+Node 1 yang menerima BusRdX dan punya state `M` untuk key `"A"` harus segera *writeback* datanya ke Redis, lalu mengubah state-nya menjadi `I` dan membalas dengan mengirimkan nilai terbaru ke Node 2.
+
+Setelah Node 2 menerima balasan, ia menulis ke cache lokalnya dan menetapkan state `M` — sekarang Node 2 adalah satu-satunya pemegang data terbaru.
 
 #### c. LRU Cache Replacement Policy
 
-Implementasi menggunakan `collections.OrderedDict`. Setiap akses (`read`/`write`) memindahkan key ke ujung kanan (*most recently used*). Saat kapasitas penuh, item di ujung kiri (*least recently used*) dikeluarkan.
+Karena ukuran cache terbatas, sistem menggunakan kebijakan **LRU (Least Recently Used)** untuk menentukan data mana yang dikeluarkan saat cache penuh.
+
+Implementasinya menggunakan `collections.OrderedDict`. Setiap akses (`read`/`write`) memindahkan key ke posisi paling akhir (*most recently used*). Saat kapasitas penuh, data di posisi paling awal (*least recently used*) dikeluarkan.
+
+Satu aturan penting: jika data yang dikeluarkan berstatus `M` (Modified), ia harus terlebih dahulu ditulis ke Redis agar tidak hilang.
 
 ```python
 # Pseudocode LRU Eviction
 if len(cache) > cache_size:
     lru_key, lru_line = cache.popitem(last=False)  # Hapus LRU
     if lru_line.state == 'M':
-        writeback(lru_key, lru_line.value) → Redis  # Jangan hilangkan data kotor!
-```
-
-#### d. Bus Snooping Protocol
-
-```mermaid
-sequenceDiagram
-    participant N2 as Node 2 (Writer)
-    participant N1 as Node 1
-    participant N3 as Node 3
-    participant MEM as Redis (Memory)
-
-    N2->>N2: Cek cache lokal key A → State I (Invalid) → Write Miss
-    N2->>N1: BusRdX {key: A, req_id: xyz}
-    N2->>N3: BusRdX {key: A, req_id: xyz}
-    N1->>N1: State A = M → Writeback ke Redis
-    N1->>MEM: SET A value
-    N1->>N1: Set State A = I
-    N1->>N2: BUS_REPLY {data: value}
-    N3->>N3: Set State A = I (jika ada)
-    N3->>N2: BUS_REPLY (ack)
-    N2->>N2: Tulis ke cache lokal
-    N2->>N2: Set State A = M (Modified)
+        writeback(lru_key, lru_line.value)  # Simpan dulu ke Redis!
 ```
 
 ---
@@ -306,47 +220,30 @@ sequenceDiagram
 
 **File:** `src/consensus/pbft.py`
 
-#### 3-Phase Commit PBFT
+PBFT (*Practical Byzantine Fault Tolerance*) adalah algoritma konsensus yang dirancang untuk situasi ekstrem: ketika ada node yang tidak hanya *crash*, tetapi aktif **berbohong** atau mengirim data yang salah secara sengaja. Node seperti ini disebut *Byzantine node* atau *malicious node*.
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant PR as Primary (node_1)
-    participant B2 as Backup node_2
-    participant B3 as Backup node_3
-    participant M4 as Malicious node_4
+Raft tidak bisa menangani skenario ini karena Raft berasumsi semua node yang merespons adalah jujur. PBFT tidak membuat asumsi tersebut.
 
-    C->>PR: CLIENT_REQUEST {command}
-    PR->>B2: PRE-PREPARE {seq, digest, command}
-    PR->>B3: PRE-PREPARE {seq, digest, command}
-    PR->>M4: PRE-PREPARE {seq, digest, command}
+#### Toleransi Kegagalan
 
-    B2->>PR: PREPARE {seq, digest=valid}
-    B2->>B3: PREPARE {seq, digest=valid}
-    B2->>M4: PREPARE {seq, digest=valid}
-    B3->>PR: PREPARE {seq, digest=valid}
-    M4->>PR: PREPARE {seq, digest=FAKE}
-    M4->>B2: PREPARE {seq, digest=FAKE}
+Rumusnya adalah `f = ⌊(N-1)/3⌋`, di mana N adalah total jumlah node. Sistem membutuhkan setidaknya `3f+1` node untuk menoleransi f node curang.
 
-    Note over PR,B3: 2f valid PREPARE terkumpul → Prepared!
+Dalam implementasi ini digunakan **4 node** (N=4), sehingga `f = 1`. Sistem dapat tetap berfungsi dengan benar meskipun ada **1 node yang berperilaku jahat**.
 
-    PR->>B2: COMMIT {seq, digest=valid}
-    PR->>B3: COMMIT {seq, digest=valid}
-    PR->>M4: COMMIT {seq, digest=valid}
-    B3->>PR: COMMIT {seq, digest=valid}
-    M4->>PR: COMMIT {seq, digest=FAKE}
+#### Tiga Fase Commit
 
-    Note over PR,B3: 2f+1 valid COMMIT → EXECUTE!
-    PR->>PR: Execute command
-    B2->>B2: Execute command
-    B3->>B3: Execute command
-```
+**Fase 1 — PRE-PREPARE:** Saat klien mengirim perintah, node Primary membuat hash dari perintah tersebut (*digest*) dan menyiarkan pesan PRE-PREPARE berisi `{nomor urut, digest, perintah}` ke semua Backup node. Ini pemberitahuan bahwa "ada perintah baru yang perlu diproses."
 
-**Toleransi kegagalan:** $f = \lfloor(N-1)/3\rfloor$. Untuk N=4: **f=1** (menoleransi 1 node jahat).
+**Fase 2 — PREPARE:** Setiap Backup node memverifikasi hash-nya. Jika valid, mereka menyiarkan pesan PREPARE berisi `{nomor urut, digest}` ke semua node lain. Sebuah node bisa lanjut ke fase berikutnya hanya setelah mengumpulkan `2f` pesan PREPARE dengan digest yang **sama**. Node curang yang mengirim digest palsu tidak punya cukup suara karena `2f` node jujur menggunakan digest yang benar.
 
-**Node Curang (Malicious Mode):**
-- Pada fase PREPARE dan COMMIT, node curang mengirimkan `"FAKE_DIGEST"` yang tidak cocok dengan hash asli perintah.
-- Node jujur mengabaikan suara yang digest-nya tidak cocok → node curang tidak dapat mengganggu konsensus karena tidak memiliki cukup suara ($2f+1$).
+**Fase 3 — COMMIT:** Setelah PREPARE selesai, setiap node menyiarkan pesan COMMIT. Perintah dieksekusi hanya setelah mengumpulkan `2f+1` pesan COMMIT dengan digest yang sama. Angka ini memastikan mayoritas absolut node jujur setuju.
+
+#### Mengapa Node Curang Tidak Bisa Mengganggu?
+
+Node curang bisa mengirim PREPARE dan COMMIT dengan digest yang salah, namun ia hanya menyumbang **1 suara palsu**. Tiga node jujur menyumbang **3 suara valid**. Ambang batas yang diperlukan adalah `2f+1 = 3`, sehingga konsensus tetap tercapai berdasarkan suara node-node jujur dan perintah yang benar tetap dieksekusi.
+
+
+
 
 ---
 
